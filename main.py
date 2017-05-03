@@ -13,6 +13,10 @@ from oauth2client import client
 from oauth2client import tools
 from oauth2client.file import Storage
 
+import pprint
+import servermap
+import pickle
+
 try:
     import argparse
     flags = argparse.ArgumentParser(parents=[tools.argparser]).parse_args()
@@ -57,58 +61,54 @@ def get_credentials():
 def getFileList():
     results = service.files().list(
         fields="nextPageToken, files(id, name)").execute()
-    
+
     return results.get('files', [])
-    
-def getFolderID(name, parent_name=None):
-    items=getFileList()
-    #If it finds folder, sends the id. If couldn't find it, create a new one.
+
+def getFolderID(name):
+    items = getFileList()
+    #If it finds folder, sends the id. If couldn't find it, creates a new one.
     for item in items:
-        if(item['name']==name):
-            if(name==root_name):
-                return root_id
-            else:
-                return item['id']
+        if (item['name'] == name):
+            return item['id']
     else:
-        if not parent_name:
-            return createFolder(name)
-        else:
-            return createFolder(name,parent_name)
-            
+        return createFolder(name)
+
 def search(name):
-    items=getFileList()
+    items = getFileList()
     for item in items:
         if(item['name'] == name):
             return False
     else:
         return True
-        
-def createFolder(folder_name, parent_name=None):
-    if search(folder_name):        
-        if not parent_name:
+
+def createFolder(folderpath):
+    folder_name = os.path.basename(folderpath)
+    parent_name = os.path.dirname(folderpath)
+    if search(folder_name):
+        if parent_name == folder_name:
             file_metadata = {
-                  'name' : folder_name,
-                  'mimeType' : 'application/vnd.google-apps.folder'
-                }
+              'name' : folder_name,
+              'mimeType' : 'application/vnd.google-apps.folder'
+            }
+            file = service.files().create(body=file_metadata, fields='id').execute()
+            folder_id = getFolderID(folder_name)
         else:
-            parent_name=os.path.basename(parent_name)
             file_metadata = {
               'name' : folder_name,
               'parents': [ getFolderID(parent_name) ],
               'mimeType' : 'application/vnd.google-apps.folder'
             }
-        
-        file = service.files().create(body=file_metadata,
-                                            fields='id').execute()
+            file = service.files().create(body=file_metadata, fields='id').execute()
+            folder_id = getFolderID(folder_name, parent_name)
         print('+ Folder : '+folder_name+' created')
-        logs.write('+ Folder : '+folder_name+', '+getFolderID(folder_name)+' created\n')
+        logs.write('+ Folder : '+folder_name+', '+folder_id+' created\n')
     else:
         print('+ Folder : '+folder_name+' already created')
-        logs.write('+ Folder : '+folder_name+', '+getFolderID(folder_name)+' adready created\n')
-    return getFolderID(folder_name)
+        logs.write('+ Folder : '+folder_name+', '+folder_id+' adready created\n')
+    return folder_id
 
 def uploadFile(filepath, folder_name):
-    filename=os.path.basename(filepath)
+    filename = os.path.basename(filepath)
     if search(filename):
         file_metadata = {
           'name' : filename,
@@ -142,52 +142,7 @@ def uploadFile(filepath, folder_name):
         print("\n\t# Upload Already Completed")
         logs.write('\t# Upload Already Completed\n')
 
-def main():
-    """Shows basic usage of the Google Drive API.
-
-    Creates a Google Drive API service object and outputs the names and IDs
-    for up to 10 files.
-    """
-    credentials = get_credentials()
-    http = credentials.authorize(httplib2.Http())
-    global service
-    service = discovery.build('drive', 'v3', http=http)
-    
-    # CODE AREA
-    # - Tek başına klasör oluşturmak.
-    #       createFolder('KlasörIsmi')
-    # - Bir klasöre alt klasör oluşturmak.
-    #       createFolder('NodeFolder1','RootFolder')
-    # - Klasörün içine dosya upload etmek.
-    #       uploadFile('azkaban.bmp','RootFolder')
-
-    root='/var/www/html/The Coding Train'
-
-    def files(dirname):
-        parent_name=os.path.basename(dirname)
-        for filename in os.listdir(dirname):
-            if os.path.isfile(os.path.join(dirname,filename)):
-                uploadFile(os.path.join(dirname,filename),parent_name)
-
-    def check(root):
-        #Checks if is there any subfolder in the current folder
-        for f in os.listdir(root):
-            if os.path.isdir(os.path.join(root,f)):
-                return True
-        else:
-            return False
-            
-    def folders(root):
-        if not check(root):
-            return
-        else:
-            for f in os.listdir(root):
-                dirpath=os.path.join(root,f)
-                if os.path.isdir(dirpath):
-                    createFolder(f,os.path.basename(root))
-                    folders(dirpath)
-                    files(dirpath)
-
+def parseData(data):
     # CONCEPT
     # - Tek başına klasör oluşturmak.
     #       createFolder('KlasörIsmi')
@@ -195,16 +150,37 @@ def main():
     #       createFolder('NodeFolder1','RootFolder')
     # - Klasörün içine dosya upload etmek.
     #       uploadFile('azkaban.bmp','RootFolder')
+    for folder in data:
+        # rootname : os.path.basename(folder)
+        # rootpath : folder
+        #print('rootname : ' + os.path.basename(folder)+' rootpath : '+folder)
+        createFolder(folder)
+        for fs in data[folder]['items']:
+            if os.path.isfile(os.path.join(folder,fs)):
+                # filename : fs
+                # filepath : data[folder]['items'][fs]
+                uploadFile(data[folder]['items'][fs], os.path.basename(folder))
+                #print('\t'+'filename : '+ fs + ' filepath : '+data[folder]['items'][fs])
+    #pprint.pprint(data)
 
+def main():
+    credentials = get_credentials()
+    http = credentials.authorize(httplib2.Http())
+    global service
+    service = discovery.build('drive', 'v3', http=http)
+    root = 'serverExample'
+    #
+    # global root_name
+    # global root_id
+    # root_name = os.path.basename(root)
+    # root_id=createFolder(root_name)
 
-    #PROGRAM START
-    global root_name
-    global root_id
-    root_name=os.path.basename(root)
-    root_id='0B_1ah-t9B5bGRGYzV2N1d3hFdUE'
-    
-    folders(root)
-    
-    
+    # gets the data from data file as sends it to parsing
+    servermap.start(root)
+    data = pickle.load(open('smap','rb'))
+    items = getFileList()
+    pprint.pprint(items)
+    #parseData(data)
+
 if __name__ == '__main__':
     main()
